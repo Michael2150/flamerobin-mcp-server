@@ -24,11 +24,16 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "firebird": {
-      "command": "C:\\path\\to\\publish-single\\FirebirdMcp.exe"
+      "command": "C:\\path\\to\\publish-single\\FirebirdMcp.exe",
+      "env": {
+        "Logging__LogLevel__Default": "None"
+      }
     }
   }
 }
 ```
+
+> **Important:** The `Logging__LogLevel__Default=None` env var is required. The server's startup log output is written to stdout, which Claude reads as part of the MCP handshake — any unexpected output causes Claude to fail to recognize the server.
 
 ## Tools
 
