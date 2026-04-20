@@ -1,6 +1,18 @@
 # flamerobin-mcp-server
 
-A Model Context Protocol (MCP) server for Firebird databases. Reads connection details from [FlameRobin's](http://www.flamerobin.org/) `fr_databases.conf` so no extra configuration is needed.
+A Model Context Protocol (MCP) server for Firebird databases intended for **local use**. It reads connection details from [FlameRobin's](http://www.flamerobin.org/) `fr_databases.conf` so no extra configuration is needed — if you have FlameRobin set up with your Firebird databases, this server works out of the box.
+
+## Compared to [mcpFirebird](https://github.com/PuroDelphi/mcpFirebird)
+
+| | This project | mcpFirebird |
+|---|---|---|
+| **Credentials** | Read automatically from FlameRobin's config — no setup required | Must pass `--user`, `--password`, `--host`, `--database` on every launch |
+| **Multi-database** | All FlameRobin-registered databases available in one session | Single database per server instance |
+| **Wire encryption** | Supported (native Firebird .NET driver) | Not supported — requires `WireCrypt = Disabled` on the server |
+| **Runtime** | .NET 9 self-contained executable | Node.js / npm |
+| **Schema introspection** | Tables, views, procedures, triggers, generators, roles, FK/PK/constraints, execution plans, missing index analysis | Tables and basic schema |
+| **DDL / DML / scripts** | Yes — `ExecuteDdl`, `ExecuteDml`, `ExecuteScript` | SQL execution only |
+| **Deployment** | Local only — runs on your PC alongside FlameRobin | Cloud-deployable via Smithery, SSE/HTTP transports |
 
 ## Building
 
