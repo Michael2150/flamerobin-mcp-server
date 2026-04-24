@@ -10,4 +10,4 @@ COPY . .
 RUN dotnet publish FirebirdMcp.csproj -c Release -o /app/publish && \
     mkdir -p /root/.flamerobin && \
     echo '<?xml version="1.0" encoding="UTF-8"?><root/>' > /root/.flamerobin/fr_databases.conf
-ENTRYPOINT ["dotnet", "/app/publish/FirebirdMcp.dll"]
+CMD ["dotnet", "/app/publish/FirebirdMcp.dll"]
