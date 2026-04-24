@@ -32,18 +32,34 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
     static List<string> FilterNames(List<string> names, string? filter) =>
         filter is null ? names : names.Where(n => Regex.IsMatch(n, filter, RegexOptions.IgnoreCase)).ToList();
 
-    [McpServerTool, Description("List all servers and databases registered in FlameRobin.")]
-    public List<object> ListDatabases() =>
-        dbs.Select(kv => (object)new {
+    [McpServerTool, Description(
+        "List all servers and databases registered in FlameRobin. " +
+        "Returns [{key, host, port, path}]. " +
+        "The 'key' value is what you must pass as the 'database' parameter in every other tool. " +
+        "filter: optional case-insensitive regex applied to key, host, or path — omit to list all.")]
+    public List<object> ListDatabases(string? filter = null)
+    {
+        var all = dbs.Select(kv => (object)new {
             key  = kv.Key,
             host = kv.Value.DataSource,
             port = kv.Value.Port,
             path = kv.Value.Database
         }).ToList();
+        if (filter is null) return all;
+        return all.Where(x => {
+            dynamic d = x;
+            return Regex.IsMatch((string)d.key,  filter, RegexOptions.IgnoreCase)
+                || Regex.IsMatch((string)d.host, filter, RegexOptions.IgnoreCase)
+                || Regex.IsMatch((string)d.path, filter, RegexOptions.IgnoreCase);
+        }).ToList();
+    }
 
     [McpServerTool, Description(
-        "List user tables, views, or both. type: 'tables' | 'views' | 'all' (default). " +
-        "filter: optional regex applied to object names (case-insensitive).")]
+        "List user tables, views, or both in a Firebird database. " +
+        "database: key from list_databases. " +
+        "type: 'tables' (non-view relations only) | 'views' | 'all' (default). " +
+        "filter: optional case-insensitive regex on object name. " +
+        "Returns a list of names — pass them to describe_table, get_table_constraints, get_foreign_keys, etc.")]
     public List<string> ListObjects(string database, string type = "all", string? filter = null)
     {
         using var conn = Open(database);
@@ -61,7 +77,11 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
         return FilterNames(r, filter);
     }
 
-    [McpServerTool, Description("List all stored procedures. filter: optional regex (case-insensitive).")]
+    [McpServerTool, Description(
+        "List all user-defined stored procedures in the database. " +
+        "database: key from list_databases. " +
+        "filter: optional case-insensitive regex on procedure name. " +
+        "Returns procedure names — pass a name to get_procedure_source to read the PSQL body.")]
     public List<string> ListProcedures(string database, string? filter = null)
     {
         using var conn = Open(database);
@@ -75,8 +95,11 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
     }
 
     [McpServerTool, Description(
-        "List all user triggers as 'TRIGGER_NAME (on TABLE_NAME)'. " +
-        "filter: optional regex applied to the full string (case-insensitive).")]
+        "List all user-defined triggers formatted as 'TRIGGER_NAME (on TABLE_NAME)'. " +
+        "database: key from list_databases. " +
+        "filter: optional case-insensitive regex applied to the full formatted string — " +
+        "e.g. pass 'on INVOICES' to see only triggers on a specific table. " +
+        "Pass just the trigger name (without the suffix) to get_trigger_source.")]
     public List<string> ListTriggers(string database, string? filter = null)
     {
         using var conn = Open(database);
@@ -89,7 +112,11 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
         return FilterNames(r, filter);
     }
 
-    [McpServerTool, Description("List all generators/sequences with current values. filter: optional regex on name.")]
+    [McpServerTool, Description(
+        "List all user-defined generators (sequences / auto-increment counters) with their current values. " +
+        "database: key from list_databases. " +
+        "filter: optional case-insensitive regex on generator name. " +
+        "Returns [{name, value}].")]
     public List<object> ListGenerators(string database, string? filter = null)
     {
         using var conn = Open(database);
@@ -103,7 +130,10 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
             : r.Where(x => Regex.IsMatch(((dynamic)x).name, filter, RegexOptions.IgnoreCase)).ToList();
     }
 
-    [McpServerTool, Description("List all roles in the database. filter: optional regex on name.")]
+    [McpServerTool, Description(
+        "List all roles defined in the database (used for grouping permissions). " +
+        "database: key from list_databases. " +
+        "filter: optional case-insensitive regex on role name.")]
     public List<string> ListRoles(string database, string? filter = null)
     {
         using var conn = Open(database);
@@ -117,8 +147,11 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
 
     [McpServerTool, Description(
         "Return column definitions for a table or view. " +
-        "brief=true returns only name, type, nullable. " +
-        "filter: optional regex on column name.")]
+        "database: key from list_databases. " +
+        "table: exact table or view name from list_objects — automatically uppercased. " +
+        "brief: if true returns only {name, type, nullable}; default false returns full detail " +
+        "including length, precision, scale, default_src, description. " +
+        "filter: optional case-insensitive regex on column name.")]
     public List<object> DescribeTable(string database, string table, bool brief = false, string? filter = null)
     {
         using var conn = Open(database);
@@ -168,7 +201,11 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
         return result;
     }
 
-    [McpServerTool, Description("Return the PSQL source of a stored procedure.")]
+    [McpServerTool, Description(
+        "Return the full PSQL source body of a stored procedure. " +
+        "database: key from list_databases. " +
+        "procedure: procedure name from list_procedures — automatically uppercased. " +
+        "Returns the raw PSQL body text, or an error message if not found.")]
     public string GetProcedureSource(string database, string procedure)
     {
         using var conn = Open(database);
@@ -178,7 +215,11 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
         return cmd.ExecuteScalar()?.ToString() ?? $"Procedure '{procedure}' not found.";
     }
 
-    [McpServerTool, Description("Return the PSQL source of a trigger.")]
+    [McpServerTool, Description(
+        "Return the full PSQL source body of a trigger. " +
+        "database: key from list_databases. " +
+        "trigger: trigger name from list_triggers (use just the name, not the '(on TABLE)' suffix) — automatically uppercased. " +
+        "Returns the raw PSQL body text, or an error message if not found.")]
     public string GetTriggerSource(string database, string trigger)
     {
         using var conn = Open(database);
@@ -188,7 +229,11 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
         return cmd.ExecuteScalar()?.ToString() ?? $"Trigger '{trigger}' not found.";
     }
 
-    [McpServerTool, Description("Return the source SQL of a view.")]
+    [McpServerTool, Description(
+        "Return the source SQL of a view. " +
+        "database: key from list_databases. " +
+        "view: view name from list_objects (type='views') — automatically uppercased. " +
+        "Returns the SELECT statement that defines the view, or an error message if not found.")]
     public string GetViewSource(string database, string view)
     {
         using var conn = Open(database);
@@ -198,7 +243,12 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
         return cmd.ExecuteScalar()?.ToString() ?? $"View '{view}' not found.";
     }
 
-    [McpServerTool, Description("Return table constraints (PK, FK, UNIQUE, CHECK).")]
+    [McpServerTool, Description(
+        "Return all constraints defined on a table: PRIMARY KEY, FOREIGN KEY, UNIQUE, and CHECK. " +
+        "database: key from list_databases. " +
+        "table: table name from list_objects — automatically uppercased. " +
+        "Returns [{constraint, type, index}]. " +
+        "For full FK relationship details (referenced columns, ON DELETE/UPDATE rules) use get_foreign_keys instead.")]
     public List<object> GetTableConstraints(string database, string table)
     {
         using var conn = Open(database);
@@ -217,7 +267,11 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
         return r;
     }
 
-    [McpServerTool, Description("Return database info: ODS, page size, dialect, etc.")]
+    [McpServerTool, Description(
+        "Return physical metadata for a Firebird database: path, ODS version (On-Disk Structure — " +
+        "indicates the Firebird engine version that created the database), page_size, pages (total allocated pages), " +
+        "sql_dialect (1 = legacy, 3 = standard/recommended), sweep_interval. " +
+        "database: key from list_databases.")]
     public object GetDatabaseInfo(string database)
     {
         using var conn = Open(database);
@@ -237,7 +291,11 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
         };
     }
 
-    [McpServerTool, Description("List active connections to this database.")]
+    [McpServerTool, Description(
+        "List all currently active non-system connections to the database (from MON$ATTACHMENTS). " +
+        "Useful for checking who is connected before running DDL or maintenance operations. " +
+        "database: key from list_databases. " +
+        "Returns [{id, user, address, process, connected_at}].")]
     public List<object> ListActiveConnections(string database)
     {
         using var conn = Open(database);
@@ -259,8 +317,13 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
     }
 
     [McpServerTool, Description(
-        "Execute a SELECT query. Use Firebird syntax (ROWS n, not LIMIT n). " +
-        "columns: optional comma-separated list of column names to include in results.")]
+        "Execute a read-only SELECT query and return results as a list of row objects. " +
+        "database: key from list_databases. " +
+        "sql: a SELECT statement using Firebird SQL syntax — use 'SELECT FIRST n ...' or " +
+        "'SELECT ... ROWS n' to limit rows, NOT 'LIMIT n' (which is not valid Firebird syntax). " +
+        "maxRows: server-side cap on rows returned (default 500). " +
+        "columns: optional comma-separated column names to include — useful to reduce noise from wide tables. " +
+        "Returns a list of row objects keyed by column name.")]
     public List<Dictionary<string, object?>> RunQuery(
         string database, string sql, int maxRows = 500, string? columns = null)
     {
@@ -289,9 +352,12 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
 
     [McpServerTool, Description(
         "Return foreign key relationships for a table. " +
-        "direction: 'out' = FKs this table declares (what it references), " +
-        "'in' = FKs other tables declare pointing here (who references this table), " +
-        "'all' (default) = both. Each row: from_table, from_column, to_table, to_column, on_update, on_delete.")]
+        "database: key from list_databases. " +
+        "table: table name from list_objects — automatically uppercased. " +
+        "direction: 'out' = FK constraints this table declares (what other tables it references), " +
+        "'in' = FK constraints on other tables that point to this table (what references it), " +
+        "'all' (default) = both directions. " +
+        "Returns [{direction, from_table, from_column, to_table, to_column, on_update, on_delete}].")]
     public List<object> GetForeignKeys(string database, string table, string direction = "all")
     {
         using var conn = Open(database);
@@ -360,7 +426,10 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
 
     [McpServerTool, Description(
         "Return the execution plan for a SELECT query — shows which indexes Firebird will use. " +
-        "Useful for spotting full table scans before running expensive queries.")]
+        "Useful for spotting full table scans before running expensive queries. " +
+        "database: key from list_databases. " +
+        "sql: a SELECT statement (not DML) — the query is prepared but not executed, so it is safe to use on large tables. " +
+        "Returns a plan string, e.g. 'PLAN (TABLE NATURAL)' or 'PLAN (TABLE INDEX (INDEX_NAME))'.")]
     public string GetExecutionPlan(string database, string sql)
     {
         using var conn = Open(database);
@@ -370,9 +439,12 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
     }
 
     [McpServerTool, Description(
-        "For a given table, show which columns have indexes and which don't. " +
-        "filterColumns: optional comma-separated list of columns you intend to filter/join on — " +
-        "only those are checked. Omit to see index coverage for all columns.")]
+        "For a given table, report which columns are covered by an active index (as the leading segment) and which are not. " +
+        "database: key from list_databases. " +
+        "table: table name from list_objects — automatically uppercased. " +
+        "filterColumns: optional comma-separated list of column names to check — useful when you only care about " +
+        "columns used in WHERE clauses or JOINs; omit to check all columns. " +
+        "Returns [{column, has_index, index (name or null), unique}].")]
     public List<object> AnalyzeMissingIndexes(string database, string table, string? filterColumns = null)
     {
         var wantedCols = filterColumns?
@@ -418,7 +490,11 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
         return result;
     }
 
-    [McpServerTool, Description("Execute a DDL statement (CREATE/ALTER/DROP) and commit.")]
+    [McpServerTool, Description(
+        "Execute a single DDL statement (CREATE TABLE, ALTER TABLE, DROP TABLE, CREATE INDEX, etc.) and auto-commit. " +
+        "database: key from list_databases. " +
+        "sql: one DDL statement — do not include a trailing semicolon. " +
+        "Returns 'DDL executed and committed.' on success, or throws on error.")]
     public string ExecuteDdl(string database, string sql)
     {
         using var conn = Open(database);
@@ -429,7 +505,12 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
         return "DDL executed and committed.";
     }
 
-    [McpServerTool, Description("Execute INSERT, UPDATE, or DELETE and commit. Returns rows affected.")]
+    [McpServerTool, Description(
+        "Execute a single INSERT, UPDATE, or DELETE statement in a transaction and commit. " +
+        "database: key from list_databases. " +
+        "sql: one DML statement — do not include a trailing semicolon. " +
+        "Returns 'Done. Rows affected: N'. Throws and rolls back on error. " +
+        "Use execute_script to run multiple statements.")]
     public string ExecuteDml(string database, string sql)
     {
         using var conn = Open(database);
@@ -440,7 +521,13 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
         return $"Done. Rows affected: {n}";
     }
 
-    [McpServerTool, Description("Execute multiple semicolon-separated statements as a script.")]
+    [McpServerTool, Description(
+        "Execute multiple SQL statements separated by semicolons. " +
+        "Each statement runs in its own transaction and is committed independently — " +
+        "if one fails the remaining statements still run. " +
+        "database: key from list_databases. " +
+        "sqlScript: semicolon-separated DDL or DML statements. " +
+        "Returns one status line per statement showing OK or ERROR with a message.")]
     public string ExecuteScript(string database, string sqlScript)
     {
         var stmts = sqlScript.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
