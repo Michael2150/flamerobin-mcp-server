@@ -436,6 +436,42 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
     }
 
     [McpServerTool, Description(
+        "Return the CHECK constraint expressions defined on a table. " +
+        "GetTableConstraints only tells you a CHECK constraint exists — this tool returns the actual expression " +
+        "so you know what values are valid before writing INSERT or UPDATE statements. " +
+        "Returns [{constraint, expression}].")]
+    public List<object> GetCheckConstraints(
+        [Description("Database key from list_databases.")]
+        string database,
+        [Description("Table name. Automatically uppercased.")]
+        string table)
+    {
+        using var conn = Open(database);
+        using var cmd = new FbCommand(@"
+            SELECT TRIM(rc.RDB$CONSTRAINT_NAME), t.RDB$TRIGGER_SOURCE
+            FROM RDB$RELATION_CONSTRAINTS rc
+            JOIN RDB$CHECK_CONSTRAINTS cc ON cc.RDB$CONSTRAINT_NAME = rc.RDB$CONSTRAINT_NAME
+            JOIN RDB$TRIGGERS t ON t.RDB$TRIGGER_NAME = cc.RDB$TRIGGER_NAME
+            WHERE rc.RDB$RELATION_NAME = @t
+              AND rc.RDB$CONSTRAINT_TYPE = 'CHECK'
+            ORDER BY rc.RDB$CONSTRAINT_NAME", conn);
+        cmd.Parameters.AddWithValue("@t", table.ToUpper());
+        using var rdr = cmd.ExecuteReader();
+        var seen = new HashSet<string>();
+        var r = new List<object>();
+        while (rdr.Read())
+        {
+            var name = rdr.GetString(0);
+            if (!seen.Add(name)) continue;
+            r.Add(new {
+                constraint = name,
+                expression = rdr.IsDBNull(1) ? null : rdr.GetString(1)?.Trim()
+            });
+        }
+        return r;
+    }
+
+    [McpServerTool, Description(
         "Return foreign key relationships involving a table, in one or both directions. " +
         "Returns [{direction, from_table, from_column, to_table, to_column, on_update, on_delete}]. " +
         "Prefer inspect_table to get FKs alongside column and index information in one call. " +
@@ -666,6 +702,27 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
     }
 
     [McpServerTool, Description(
+        "Advance a generator (sequence) by the given increment and return the new value. " +
+        "Use this to obtain a primary key value before inserting a row that uses a generator-based ID. " +
+        "WARNING: this permanently advances the generator — the consumed value cannot be reclaimed. " +
+        "Returns {generator, increment, value}.")]
+    public object GetNextGeneratorValue(
+        [Description("Database key from list_databases.")]
+        string database,
+        [Description("Generator name from list_generators. Automatically uppercased.")]
+        string generator,
+        [Description("How much to advance the generator. Default 1 (get next ID). " +
+                     "Pass 0 to read the current value without advancing.")]
+        int increment = 1)
+    {
+        var safeName = Regex.Replace(generator.ToUpper(), @"[^A-Z0-9_$]", "");
+        using var conn = Open(database);
+        using var cmd = new FbCommand($"SELECT GEN_ID({safeName}, {increment}) FROM RDB$DATABASE", conn);
+        var value = cmd.ExecuteScalar();
+        return new { generator = safeName, increment, value };
+    }
+
+    [McpServerTool, Description(
         "List all roles defined in the database. Roles group privileges and are granted to users.")]
     public List<string> ListRoles(
         [Description("Database key from list_databases.")]
@@ -738,6 +795,85 @@ public class FirebirdTools(Dictionary<string, FbConnectionStringBuilder> dbs)
                 connected_at = rdr.IsDBNull(4) ? (object?)null : rdr.GetValue(4)
             });
         }
+        return r;
+    }
+
+    // ── Data exploration ──────────────────────────────────────────────────────
+
+    [McpServerTool, Description(
+        "Return a small sample of rows from a table without writing SQL. " +
+        "Use this to understand what real data looks like before writing queries or DML. " +
+        "Returns [{column: value, ...}] per row.")]
+    public List<Dictionary<string, object?>> SampleTable(
+        [Description("Database key from list_databases.")]
+        string database,
+        [Description("Table or view name. Automatically uppercased.")]
+        string table,
+        [Description("Number of rows to return. Defaults to 5.")]
+        int rows = 5)
+    {
+        var safeName = Regex.Replace(table.ToUpper(), @"[^A-Z0-9_$]", "");
+        using var conn = Open(database);
+        using var cmd = new FbCommand($"SELECT FIRST {rows} * FROM {safeName}", conn);
+        using var rdr = cmd.ExecuteReader();
+        var result = new List<Dictionary<string, object?>>();
+        while (rdr.Read())
+        {
+            var row = new Dictionary<string, object?>();
+            for (int i = 0; i < rdr.FieldCount; i++)
+                row[rdr.GetName(i)] = rdr.IsDBNull(i) ? null : rdr.GetValue(i);
+            result.Add(row);
+        }
+        return result;
+    }
+
+    [McpServerTool, Description(
+        "Return the row count for a table, optionally filtered by a WHERE clause. " +
+        "Use before run_query to gauge table size and decide whether to add a row limit. " +
+        "Returns {table, where, count}.")]
+    public object CountRows(
+        [Description("Database key from list_databases.")]
+        string database,
+        [Description("Table name. Automatically uppercased.")]
+        string table,
+        [Description("Optional WHERE clause (without the WHERE keyword) to count a subset of rows. " +
+                     "Example: 'STATUS = 0 AND CREATED_AT > ''2024-01-01'''. Omit to count all rows.")]
+        string? where = null)
+    {
+        var safeName = Regex.Replace(table.ToUpper(), @"[^A-Z0-9_$]", "");
+        var sql = string.IsNullOrWhiteSpace(where)
+            ? $"SELECT COUNT(*) FROM {safeName}"
+            : $"SELECT COUNT(*) FROM {safeName} WHERE {where}";
+        using var conn = Open(database);
+        using var cmd = new FbCommand(sql, conn);
+        var count = cmd.ExecuteScalar();
+        return new { table = safeName, where, count };
+    }
+
+    [McpServerTool, Description(
+        "Return the distinct values of a column and how many rows contain each value, ordered by frequency. " +
+        "Use this to understand the range of values in a column before writing WHERE clauses or CHECK constraints. " +
+        "Returns [{value, count}] ordered by count descending.")]
+    public List<object> GetDistinctValues(
+        [Description("Database key from list_databases.")]
+        string database,
+        [Description("Table name. Automatically uppercased.")]
+        string table,
+        [Description("Column name to inspect. Automatically uppercased.")]
+        string column,
+        [Description("Maximum number of distinct values to return, ordered by frequency. Defaults to 20.")]
+        int limit = 20)
+    {
+        var safeName = Regex.Replace(table.ToUpper(),  @"[^A-Z0-9_$]", "");
+        var safeCol  = Regex.Replace(column.ToUpper(), @"[^A-Z0-9_$]", "");
+        using var conn = Open(database);
+        using var cmd = new FbCommand(
+            $"SELECT FIRST {limit} {safeCol}, COUNT(*) AS cnt " +
+            $"FROM {safeName} GROUP BY {safeCol} ORDER BY cnt DESC", conn);
+        using var rdr = cmd.ExecuteReader();
+        var r = new List<object>();
+        while (rdr.Read())
+            r.Add(new { value = rdr.IsDBNull(0) ? null : rdr.GetValue(0), count = rdr.GetValue(1) });
         return r;
     }
 

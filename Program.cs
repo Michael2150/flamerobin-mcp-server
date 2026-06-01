@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Xml.Linq;
 using FirebirdSql.Data.FirebirdClient;
@@ -48,10 +49,14 @@ builder.Services
     .AddSingleton(databases)
     .AddMcpServer(options =>
     {
+        var version = Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "0.0.0";
+
         options.ServerInfo = new ModelContextProtocol.Protocol.Implementation
         {
             Name    = "Firebird MCP",
-            Version = "1.0.0"
+            Version = version
         };
         options.ServerInstructions =
             "This server exposes Firebird databases registered in FlameRobin. " +

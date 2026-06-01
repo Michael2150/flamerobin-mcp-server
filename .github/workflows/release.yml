@@ -26,13 +26,16 @@ jobs:
           dotnet-version: 9.x
 
       - name: Restore & build
+        shell: pwsh
         run: |
+          $ver = "${{ github.event.inputs.version }}"
           dotnet restore FirebirdMcp.csproj
-          dotnet build FirebirdMcp.csproj --no-restore --configuration Release
+          dotnet build FirebirdMcp.csproj --no-restore --configuration Release -p:Version=$ver
 
       - name: Publish platform binaries
         shell: pwsh
         run: |
+          $ver = "${{ github.event.inputs.version }}"
           $targets = @(
             [pscustomobject]@{ Rid = "win-x64";     Out = "firebird-mcp-win-x64.exe" },
             [pscustomobject]@{ Rid = "osx-x64";     Out = "firebird-mcp-osx-x64" },
@@ -46,6 +49,7 @@ jobs:
             dotnet publish FirebirdMcp.csproj `
               -r $t.Rid -c Release `
               -p:PublishSingleFile=true `
+              -p:Version=$ver `
               --self-contained true `
               -o "publish/$($t.Rid)"
             $src = if ($t.Rid -like "win-*") { "publish/$($t.Rid)/FirebirdMcp.exe" }
@@ -55,7 +59,7 @@ jobs:
           }
           Get-ChildItem publish -File | Select-Object Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}}
 
-      - name: Tag the release
+      - name: Tag & push
         shell: bash
         run: |
           git config user.name  "github-actions[bot]"
