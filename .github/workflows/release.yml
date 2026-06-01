@@ -1,0 +1,73 @@
+name: Release
+
+# Manually triggered from Actions → Release → Run workflow.
+# Enter the version number (e.g. 1.2.0) — GitHub creates the tag,
+# builds platform binaries, and publishes the GitHub Release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 1.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.x
+
+      - name: Restore & build
+        run: |
+          dotnet restore FirebirdMcp.csproj
+          dotnet build FirebirdMcp.csproj --no-restore --configuration Release
+
+      - name: Publish platform binaries
+        shell: pwsh
+        run: |
+          $targets = @(
+            [pscustomobject]@{ Rid = "win-x64";     Out = "firebird-mcp-win-x64.exe" },
+            [pscustomobject]@{ Rid = "osx-x64";     Out = "firebird-mcp-osx-x64" },
+            [pscustomobject]@{ Rid = "osx-arm64";   Out = "firebird-mcp-osx-arm64" },
+            [pscustomobject]@{ Rid = "linux-x64";   Out = "firebird-mcp-linux-x64" },
+            [pscustomobject]@{ Rid = "linux-arm64"; Out = "firebird-mcp-linux-arm64" }
+          )
+          New-Item -ItemType Directory -Force publish | Out-Null
+          foreach ($t in $targets) {
+            Write-Host "Publishing $($t.Rid)..."
+            dotnet publish FirebirdMcp.csproj `
+              -r $t.Rid -c Release `
+              -p:PublishSingleFile=true `
+              --self-contained true `
+              -o "publish/$($t.Rid)"
+            $src = if ($t.Rid -like "win-*") { "publish/$($t.Rid)/FirebirdMcp.exe" }
+                   else                       { "publish/$($t.Rid)/FirebirdMcp" }
+            Copy-Item $src "publish/$($t.Out)"
+            Write-Host "  -> publish/$($t.Out)"
+          }
+          Get-ChildItem publish -File | Select-Object Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Tag the release
+        shell: bash
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "v${{ github.event.inputs.version }}"
+          git push origin "v${{ github.event.inputs.version }}"
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag   = "v${{ github.event.inputs.version }}"
+          $files = Get-ChildItem publish -File | Select-Object -ExpandProperty FullName
+          gh release create $tag @files --title $tag --generate-notes

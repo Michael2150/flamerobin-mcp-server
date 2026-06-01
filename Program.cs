@@ -46,7 +46,29 @@ foreach (var srv in doc.Root!.Elements("server"))
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services
     .AddSingleton(databases)
-    .AddMcpServer()
+    .AddMcpServer(options =>
+    {
+        options.ServerInfo = new ModelContextProtocol.Protocol.Implementation
+        {
+            Name    = "Firebird MCP",
+            Version = "1.0.0"
+        };
+        options.ServerInstructions =
+            "This server exposes Firebird databases registered in FlameRobin. " +
+            "Workflow: (1) call list_databases to get database keys; " +
+            "(2) call get_schema_summary to understand the database layout before writing any SQL; " +
+            "(3) call inspect_table for full structural detail on a specific table (columns, PK, indexes, FK) — " +
+            "prefer this over calling describe_table + get_table_constraints + get_foreign_keys separately; " +
+            "(4) finding tables or columns by name: " +
+            "use search_schema(pattern, scope='tables') to find tables whose names match a regex, " +
+            "search_schema(pattern, scope='columns') to find which tables contain a column matching a regex, " +
+            "or get_schema_summary(filter) to get matching tables with their full column/PK/FK detail — " +
+            "prefer these over listing everything and scanning manually; " +
+            "(5) call get_execution_plan before run_query on large tables to verify an index will be used. " +
+            "Firebird SQL notes: row limiting uses 'SELECT FIRST n' or 'ROWS n', NOT 'LIMIT n'. " +
+            "String concatenation uses '||'. All identifiers are automatically uppercased by this server. " +
+            "DDL is irreversible — always inspect the object first before ALTER or DROP.";
+    })
     .WithStdioServerTransport()
     .WithTools<FirebirdTools>();
 
